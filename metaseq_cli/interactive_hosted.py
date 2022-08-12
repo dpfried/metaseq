@@ -235,6 +235,21 @@ def _create_error_response(msg, http_code, **others):
     return response
 
 
+def encode_prompts(prompts):
+    if isinstance(prompts, str):
+        # single string. tokenize and turn it to the single pre-tokenized case
+        prompts = [encode_fn(generator, prompts)]
+    assert isinstance(prompts, list)
+    assert len(prompts) > 0
+    if isinstance(prompts[0], str):
+        # multi string
+        prompts = [encode_fn(generator, p) for p in prompts]
+    elif isinstance(prompts[0], int):
+        # single pre-tokenized
+        prompts = [prompts]
+    assert isinstance(prompts[0], list)
+    return prompts
+
 @app.route("/completions", methods=["POST"])
 @app.route("/v1/engines/<engine>/completions", methods=["POST"])
 @app.route("/v2/engines/<engine>/completions", methods=["POST"])
@@ -254,20 +269,26 @@ def completions(engine=None):
 
     prompts = request.json["prompt"]
     del request.json["prompt"]
+
+    prompts = encode_prompts(prompts)
+    if "suffix" in request.json:
+        suffixes = encode_prompts(request.json["suffix"])
+        del request.json["suffix"]
+
+        # now "tile" suffixes to be the same as prefixes (for compatibility with OpenAI API, which allows passing just a single suffix)
+        if len(suffixes) == 1:
+            suffixes = suffixes * len(prompts)
+        elif len(suffixes) != len(prompts):
+            raise ValueError(f"Queried with {len(prompts)} prompt(s) but {len(suffixes)} suffix(es)")
+
+        new_prompts = []
+        for prompt, suffix in zip(prompts, suffixes):
+            new_prompt = prompt + encode_fn(generator, "<sentinel:0>") + suffix + encode_fn(generator, "<sentinel:1><sentinel:0>")
+            new_prompts.append(new_prompt)
+        prompts = new_prompts
+
     generation_args = request.json
 
-    if isinstance(prompts, str):
-        # single string. tokenize and turn it to the single pre-tokenized case
-        prompts = [encode_fn(generator, prompts)]
-    assert isinstance(prompts, list)
-    assert len(prompts) > 0
-    if isinstance(prompts[0], str):
-        # multi string
-        prompts = [encode_fn(generator, p) for p in prompts]
-    elif isinstance(prompts[0], int):
-        # single pre-tokenized
-        prompts = [prompts]
-    assert isinstance(prompts[0], list)
     # final case: multi pre-tokenized
     # assert len(prompts[0]) > 0
 
